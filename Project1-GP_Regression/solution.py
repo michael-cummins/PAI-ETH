@@ -5,7 +5,9 @@ import numpy as np
 from sklearn.gaussian_process import GaussianProcessRegressor
 import matplotlib.pyplot as plt
 from matplotlib import cm
+
 from sklearn.cluster import KMeans
+from sklearn.metrics import pairwise_distances_argmin_min
 
 # Set `EXTENDED_EVALUATION` to `True` in order to visualize your predictions.
 EXTENDED_EVALUATION = False
@@ -63,19 +65,19 @@ class Model(object):
 
         # TODO: Fit your model here
         train_x = self.cluster(train_features)
-        print(train_x)
-        print(train_features)
-        index  = np.where(train_features == train_x[0])
-        print(index)
+        print(len(train_x))
         print(train_x[0])
-        print(train_features[index])
+        index = np.where(train_features == train_x[0,:])
+        print([train_features[i] for i in index])
         pass
 
     def cluster(self, train_x):
         N = int(len(train_x)*0.06)
         cls_model = KMeans(n_clusters=N)
         cls_model.fit(train_x)
-        return cls_model.cluster_centers_
+        closest, _ = pairwise_distances_argmin_min(cls_model.cluster_centers_, train_x)
+        clustered_x = np.array([train_x[i] for i in closest])
+        return clustered_x
 
 
 def cost_function(ground_truth: np.ndarray, predictions: np.ndarray) -> float:
