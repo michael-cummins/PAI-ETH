@@ -5,7 +5,7 @@ import numpy as np
 from sklearn.gaussian_process import GaussianProcessRegressor
 import matplotlib.pyplot as plt
 from matplotlib import cm
-
+from sklearn.cluster import KMeans
 
 # Set `EXTENDED_EVALUATION` to `True` in order to visualize your predictions.
 EXTENDED_EVALUATION = False
@@ -32,6 +32,7 @@ class Model(object):
         We already provide a random number generator for reproducibility.
         """
         self.rng = np.random.default_rng(seed=0)
+        print(self.rng)
 
         # TODO: Add custom initialization for your model here if necessary
 
@@ -53,7 +54,7 @@ class Model(object):
 
         return predictions, gp_mean, gp_std
 
-    def fitting_model(self, train_GT: np.ndarray,train_features: np.ndarray):
+    def fitting_model(self, train_GT: np.ndarray, train_features: np.ndarray):
         """
         Fit your model on the given training data.
         :param train_features: Training features as a 2d NumPy float array of shape (NUM_SAMPLES, 2)
@@ -61,7 +62,20 @@ class Model(object):
         """
 
         # TODO: Fit your model here
+        train_x = self.cluster(train_features)
+        print(train_x)
+        print(train_features)
+        index  = np.where(train_features == train_x[0])
+        print(index)
+        print(train_x[0])
+        print(train_features[index])
         pass
+
+    def cluster(self, train_x):
+        N = int(len(train_x)*0.06)
+        cls_model = KMeans(n_clusters=N)
+        cls_model.fit(train_x)
+        return cls_model.cluster_centers_
 
 
 def cost_function(ground_truth: np.ndarray, predictions: np.ndarray) -> float:
