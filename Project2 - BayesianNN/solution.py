@@ -534,7 +534,6 @@ class BackpropTrainer(Framework):
                 minibatch_likelihood = 2 ** (num_batches - batch_idx - 1) / (2 ** num_batches - 1)
                 loss = F.nll_loss(F.log_softmax(current_logits, dim=1), batch_y, reduction='sum')
                 loss += minibatch_likelihood * (log_variational_posterior - log_prior)
-                print(f'Loss: {loss}')
 
                 # Backpropagate to get the gradients
                 loss.backward()
@@ -557,27 +556,27 @@ class BackpropTrainer(Framework):
         :return: Predicted class probabilities, float tensor of shape (batch_size, 10)
             such that the last dimension sums up to 1 for each row
         """
-        # probability_samples = torch.stack([F.softmax(self.network(x)[0], dim=1) for _ in range(num_mc_samples)], dim=0)
-        # estimated_probability = torch.mean(probability_samples, dim=0)
+        probability_samples = torch.stack([F.softmax(self.network(x)[0], dim=1) for _ in range(num_mc_samples)], dim=0)
+        estimated_probability = torch.mean(probability_samples, dim=0)
 
-        # assert estimated_probability.shape == (x.shape[0], 10)
-        # assert torch.allclose(torch.sum(estimated_probability, dim=1), torch.tensor(1.0))
-        # return estimated_probability
+        assert estimated_probability.shape == (x.shape[0], 10)
+        assert torch.allclose(torch.sum(estimated_probability, dim=1), torch.tensor(1.0))
+        return estimated_probability
 
-        self.network.eval()
+        # self.network.eval()
+        # data_loader = x
+        # probability_batches = []
+        # for batch_x, batch_y in data_loader:
+        #     batch_x = batch_x.to(self.device)
+        #     batch_y = batch_y.to(self.device)
+        #     current_probabilities = self.network.predict_probabilities(batch_x).detach().cpu().numpy()
+        #     probability_batches.append(current_probabilities)
 
-        probability_batches = []
-        for batch_x, batch_y in data_loader:
-            batch_x = batch_x.to(self.device)
-            batch_y = batch_y.to(self.device)
-            current_probabilities = self.network.predict_probabilities(batch_x).detach().cpu().numpy()
-            probability_batches.append(current_probabilities)
-
-        output = np.concatenate(probability_batches, axis=0)
-        assert isinstance(output, np.ndarray)
-        assert output.ndim == 2 and output.shape[1] == 10
-        assert np.allclose(np.sum(output, axis=1), 1.0)
-        return output
+        # output = np.concatenate(probability_batches, axis=0)
+        # assert isinstance(output, np.ndarray)
+        # assert output.ndim == 2 and output.shape[1] == 10
+        # assert np.allclose(np.sum(output, axis=1), 1.0)
+        # return output
 
 
 class BayesianLayer(nn.Module):
@@ -1012,11 +1011,11 @@ def evaluate(model:Framework, eval_loader: torch.utils.data.DataLoader, data_dir
 
 
 def main():
-    # raise RuntimeError(
-    #     'This main method is for illustrative purposes only and will NEVER be called by the checker!\n'
-    #     'The checker always calls run_solution directly.\n'
-    #     'Please implement your solution exclusively in the methods and classes mentioned in the task description.'
-    # )
+    raise RuntimeError(
+        'This main method is for illustrative purposes only and will NEVER be called by the checker!\n'
+        'The checker always calls run_solution directly.\n'
+        'Please implement your solution exclusively in the methods and classes mentioned in the task description.'
+    )
 
     # Load training data
     data_dir = os.curdir
