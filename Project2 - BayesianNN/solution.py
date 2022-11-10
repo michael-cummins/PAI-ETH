@@ -198,7 +198,6 @@ class DummyTrainer(Framework):
     def __init__(self, dataset_train,
                  *args, **kwargs):
         super().__init__(dataset_train, *args, **kwargs)
-
         # Hyperparameters and general parameters
         self.batch_size = 128
         self.learning_rate = 1e-3
