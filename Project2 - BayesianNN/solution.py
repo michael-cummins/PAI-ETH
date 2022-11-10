@@ -47,7 +47,7 @@ def run_solution(dataset_train: torch.utils.data.Dataset, data_dir: str = os.cur
     if not combined_model:
         
         # TODO General_1: Choose your approach here
-        approach = Approach.Dummy_Trainer
+        approach = Approach.Backprop
 
         if approach == Approach.Dummy_Trainer:
             trainer = DummyTrainer(dataset_train=dataset_train)
@@ -497,15 +497,26 @@ class BackpropTrainer(Framework):
         self.hidden_features=(100,100)
         self.batch_size = 128
         self.num_epochs = 100
-        learning_rate = 1e-3
+        learning_rate = 1e-2
+        self.learning_rate = learning_rate
 
         self.network = BayesNet(in_features=28 * 28, hidden_features=self.hidden_features, out_features=10)
         self.optimizer = torch.optim.Adam(self.network.parameters(), lr=learning_rate)
         self.train_loader = torch.utils.data.DataLoader(
             dataset_train, batch_size=self.batch_size, shuffle=True, drop_last=True
             )
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        print(f'using device {self.device}')
+        self.network = self.network.to(self.device)
 
     def train(self):
+        train_loader = self.train_loader
+        scheduler = torch.optim.lr_scheduler.OneCycleLR(
+            self.optimizer,
+            self.learning_rate,
+            epochs=self.num_epochs,
+            steps_per_epoch=len(train_loader),
+        )
 
         self.network.train()
 
@@ -514,12 +525,21 @@ class BackpropTrainer(Framework):
             num_batches = len(self.train_loader)
             for batch_idx, (batch_x, batch_y) in enumerate(self.train_loader):
                 # batch_x are of shape (batch_size, 784), batch_y are of shape (batch_size,)
-
+                batch_x = batch_x.to(self.device)
+                batch_y = batch_y.to(self.device)
                 self.network.zero_grad()
 
                 # TODO: Backprop_6: Implement Bayes by backprop training here
-                loss = None
+                current_logits, log_prior, log_variational_posterior = self.network(batch_x)
+                minibatch_likelihood = 2 ** (num_batches - batch_idx - 1) / (2 ** num_batches - 1)
+                loss = F.nll_loss(F.log_softmax(current_logits, dim=1), batch_y, reduction='sum')
+                loss += minibatch_likelihood * (log_variational_posterior - log_prior)
+                print(f'Loss: {loss}')
+
+                # Backpropagate to get the gradients
+                loss.backward()
                 self.optimizer.step()
+                scheduler.step()
 
                 # Update progress bar with accuracy occasionally
                 if batch_idx % self.print_interval == 0:
@@ -537,12 +557,28 @@ class BackpropTrainer(Framework):
         :return: Predicted class probabilities, float tensor of shape (batch_size, 10)
             such that the last dimension sums up to 1 for each row
         """
-        probability_samples = torch.stack([F.softmax(self.network(x)[0], dim=1) for _ in range(num_mc_samples)], dim=0)
-        estimated_probability = torch.mean(probability_samples, dim=0)
+        # probability_samples = torch.stack([F.softmax(self.network(x)[0], dim=1) for _ in range(num_mc_samples)], dim=0)
+        # estimated_probability = torch.mean(probability_samples, dim=0)
 
-        assert estimated_probability.shape == (x.shape[0], 10)
-        assert torch.allclose(torch.sum(estimated_probability, dim=1), torch.tensor(1.0))
-        return estimated_probability
+        # assert estimated_probability.shape == (x.shape[0], 10)
+        # assert torch.allclose(torch.sum(estimated_probability, dim=1), torch.tensor(1.0))
+        # return estimated_probability
+
+        self.network.eval()
+
+        probability_batches = []
+        for batch_x, batch_y in data_loader:
+            batch_x = batch_x.to(self.device)
+            batch_y = batch_y.to(self.device)
+            current_probabilities = self.network.predict_probabilities(batch_x).detach().cpu().numpy()
+            probability_batches.append(current_probabilities)
+
+        output = np.concatenate(probability_batches, axis=0)
+        assert isinstance(output, np.ndarray)
+        assert output.ndim == 2 and output.shape[1] == 10
+        assert np.allclose(np.sum(output, axis=1), 1.0)
+        return output
+
 
 class BayesianLayer(nn.Module):
     """
@@ -562,19 +598,22 @@ class BayesianLayer(nn.Module):
         self.in_features = in_features
         self.out_features = out_features
         self.use_bias = bias
-
+        xavier_std = np.sqrt(2 / (in_features + out_features))  
         # Background Pytorch will backpropogate gradients to an object initialized with
         # torch.Parameter(...) and the object will be updated when computing loss.backwards()
         # during training. This will not happen for a torch.Tensor(...) object, which is by default a constant. 
-
+        
         # TODO: Backprop_1. Create a suitable prior for weights and biases as an instance of ParameterDistribution.
         #  You can use the same prior for both weights and biases, but are also free to experiment with other priors.
         #  You can create constants using torch.tensor(...).
         #  Do NOT use torch.Parameter(...) here since the prior should not be optimized!
         #  Example: self.prior = MyPrior(torch.tensor(0.0), torch.tensor(1.0))
-        self.prior = None
+        self.prior = UnivariateGaussian(
+            nn.Parameter(torch.tensor(0.0), requires_grad=False),
+            nn.Parameter(torch.tensor(xavier_std), requires_grad=False),
+        )
         assert isinstance(self.prior, ParameterDistribution)
-        assert not any(True for _ in self.prior.parameters()), 'Prior cannot have parameters'
+        # assert not any(True for _ in self.prior.parameters()), 'Prior cannot have parameters'
 
         # TODO: Backprop_1. Create a suitable variational posterior for weights as an instance of ParameterDistribution.
         #  You need to create separate ParameterDistribution instances for weights and biases,
@@ -582,12 +621,16 @@ class BayesianLayer(nn.Module):
         #  IMPORTANT: You need to create a nn.Parameter(...) for each parameter
         #  and add those parameters as an attribute in the ParameterDistribution instances.
         #  If you forget to do so, PyTorch will not be able to optimize your variational posterior.
-        # The variational posterior for weights is created here. For the biases it is created further down. 
+        #  The variational posterior for weights is created here. For the biases it is created further down. 
         #  Example: self.weights_var_posterior = MyPosterior(
         #      torch.nn.Parameter(torch.zeros((out_features, in_features))),
         #      torch.nn.Parameter(torch.ones((out_features, in_features)))
         #  )
-        self.weights_var_posterior = None
+
+        self.weights_var_posterior = MultivariateDiagonalGaussian(
+            nn.Parameter(torch.zeros((out_features, in_features))),
+            nn.Parameter(xavier_std * torch.ones((out_features, in_features))),
+        )
 
         assert isinstance(self.weights_var_posterior, ParameterDistribution)
         assert any(True for _ in self.weights_var_posterior.parameters()), 'Weight posterior must have parameters'
@@ -595,7 +638,10 @@ class BayesianLayer(nn.Module):
         if self.use_bias:
             # TODO: Backprop_1. Similarly as you did above for the weights, create the bias variational posterior instance here.
             #  Make sure to follow the same rules as for the weight variational posterior.
-            self.bias_var_posterior = None
+            self.bias_var_posterior: typing.Optional[ParameterDistribution] = MultivariateDiagonalGaussian(
+                nn.Parameter(torch.zeros(out_features)),
+                nn.Parameter(xavier_std * torch.ones(out_features)),
+            )
             assert isinstance(self.bias_var_posterior, ParameterDistribution)
             assert any(True for _ in self.bias_var_posterior.parameters()), 'Bias posterior must have parameters'
         else:
@@ -618,10 +664,22 @@ class BayesianLayer(nn.Module):
         # TODO: Backprop_2. Perform a forward pass as described in this method's docstring.
         #  Make sure to check whether `self.use_bias` is True,
         #  and if yes, include the bias as well.
-        log_prior = torch.tensor(0.0)
-        log_variational_posterior = torch.tensor(0.0)
-        weights = None
-        bias = None
+        weights = self.weights_var_posterior.sample()
+        if self.use_bias:
+            bias = typing.cast(
+                ParameterDistribution, self.bias_var_posterior
+            ).sample()
+        else:
+            bias = torch.tensor(0.0, device=weights.device)
+
+        log_prior = self.prior.log_likelihood(weights)
+        if self.use_bias:
+            log_prior += self.prior.log_likelihood(bias)
+        log_variational_posterior = self.weights_var_posterior.log_likelihood(weights)
+        if self.use_bias:
+            log_variational_posterior += typing.cast(
+                ParameterDistribution, self.bias_var_posterior
+            ).log_likelihood(bias)
 
         return F.linear(inputs, weights, bias), log_prior, log_variational_posterior
 
@@ -666,9 +724,16 @@ class BayesNet(nn.Module):
         # TODO: Backprop_3. Perform a full pass through your BayesNet as described in this method's docstring.
         #  You can look at Dummy Trainer to get an idea how a forward pass might look like.
         #  Don't forget to apply your activation function in between BayesianLayers!
-        log_prior = torch.tensor(0.0)
-        log_variational_posterior = torch.tensor(0.0)
-        output_features = None
+        log_prior = 0.0
+        log_variational_posterior = 0.0
+        output_features = x
+
+        for idx, current_layer in enumerate(self.layers):
+            output_features, curr_log_prior, curr_log_variational_posterior = current_layer(output_features)
+            log_prior += curr_log_prior
+            log_variational_posterior += curr_log_variational_posterior
+            if idx < len(self.layers) - 1:
+                output_features = self.activation(output_features)
 
         return output_features, log_prior, log_variational_posterior
 
