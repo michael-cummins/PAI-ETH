@@ -761,6 +761,7 @@ class UnivariateGaussian(ParameterDistribution):
     For multivariate data, this assumes all elements to be i.i.d.
     """
 
+    
     def __init__(self, mu: torch.Tensor, sigma: torch.Tensor):
         super(UnivariateGaussian, self).__init__()  # always make sure to include the super-class init call!
         assert mu.size() == () and sigma.size() == ()
@@ -769,14 +770,13 @@ class UnivariateGaussian(ParameterDistribution):
         self.sigma = sigma
 
     def log_likelihood(self, values: torch.Tensor) -> torch.Tensor:
-        # TODO: Backprop_4. You need to complete the log likelihood function 
-        # for the Univariate Gaussian distribution. 
-        return 0.0
+        ll = -0.5 * np.log(2 * np.pi)
+        ll -= torch.log(self.sigma)
+        ll -= 0.5 * (((values - self.mu) / self.sigma) ** 2).sum()
+        return ll
 
     def sample(self) -> torch.Tensor:
-        # TODO: Backprop_4. You need to complete the sample function 
-        # for the Univariate Gaussian distribution. 
-        raise NotImplementedError()
+        return torch.randn((), device=self.mu.device) * self.sigma + self.mu
 
 
 class MultivariateDiagonalGaussian(ParameterDistribution):
@@ -788,6 +788,7 @@ class MultivariateDiagonalGaussian(ParameterDistribution):
     sigma = softplus(rho).
     """
 
+    
     def __init__(self, mu: torch.Tensor, rho: torch.Tensor):
         super(MultivariateDiagonalGaussian, self).__init__()  # always make sure to include the super-class init call!
         assert mu.size() == rho.size()
@@ -795,14 +796,16 @@ class MultivariateDiagonalGaussian(ParameterDistribution):
         self.rho = rho
 
     def log_likelihood(self, values: torch.Tensor) -> torch.Tensor:
-        # TODO: Backprop_5. You need to complete the log likelihood function 
-        # for the Multivariate DiagonalGaussian Gaussian distribution. 
-        return 0.0
+        var = F.softplus(self.rho.flatten()) ** 2
+        ll = -(len(var) / 2) * np.log(2 * np.pi)
+        ll -= 0.5 * var.log().sum()
+        diff = (values - self.mu).flatten()
+        ll -= 0.5 * diff.T @ ((1 / var) * diff)
+        return ll
 
     def sample(self) -> torch.Tensor:
-        # TODO: Backprop_5. You need to complete the sample function 
-        # for the Multivariate DiagonalGaussian Gaussian distribution. 
-        raise NotImplementedError()
+        sigma = F.softplus(self.rho)
+        return torch.randn(*self.mu.shape, device=sigma.device) * sigma + self.mu
 
 
 
@@ -1009,11 +1012,11 @@ def evaluate(model:Framework, eval_loader: torch.utils.data.DataLoader, data_dir
 
 
 def main():
-    raise RuntimeError(
-        'This main method is for illustrative purposes only and will NEVER be called by the checker!\n'
-        'The checker always calls run_solution directly.\n'
-        'Please implement your solution exclusively in the methods and classes mentioned in the task description.'
-    )
+    # raise RuntimeError(
+    #     'This main method is for illustrative purposes only and will NEVER be called by the checker!\n'
+    #     'The checker always calls run_solution directly.\n'
+    #     'Please implement your solution exclusively in the methods and classes mentioned in the task description.'
+    # )
 
     # Load training data
     data_dir = os.curdir
