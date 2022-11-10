@@ -8,18 +8,30 @@ from matplotlib import cm
 
 from sklearn.cluster import KMeans
 from sklearn.metrics import pairwise_distances_argmin_min
+from sklearn.gaussian_process.kernels import RBF, ConstantKernel, RationalQuadratic, WhiteKernel
+import pandas as pd
 
 # Set `EXTENDED_EVALUATION` to `True` in order to visualize your predictions.
 EXTENDED_EVALUATION = False
 EVALUATION_GRID_POINTS = 300  # Number of grid points used in extended evaluation
 EVALUATION_GRID_POINTS_3D = 50  # Number of points displayed in 3D during evaluation
 
-
 # Cost function constants
 COST_W_UNDERPREDICT = 25.0
 COST_W_NORMAL = 1.0
 COST_W_OVERPREDICT = 10.0
 
+class RFF_RBF:
+    def __init__(self, sigma_f: float = 1, length: float = 1):
+        self.sigma_f = sigma_f
+        self.l = length
+
+    def __call__(self, x1: np.array, x2: np.array) -> float:
+        return float(((self.sigma_f**2)/2*np.pi)*np.exp(-(np.linalg.norm(x1 - x2)**2)/2*(self.l**2)))
+
+# Helper function to calculate the respective covariance matrices
+def cov_matrix(x1, x2, cov_function) -> np.array:
+    return np.array([[cov_function(a, b) for a in x1] for b in x2])
 
 class Model(object):
     """
@@ -34,8 +46,8 @@ class Model(object):
         We already provide a random number generator for reproducibility.
         """
         self.rng = np.random.default_rng(seed=0)
-        print(self.rng)
-
+        self.covariance_function = RFF_RBF()
+        # print(self.rng)
         # TODO: Add custom initialization for your model here if necessary
 
     def make_predictions(self, test_features: np.ndarray) -> typing.Tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -46,12 +58,38 @@ class Model(object):
             Tuple of three 1d NumPy float arrays, each of shape (NUM_SAMPLES,),
             containing your predictions, the GP posterior mean, and the GP posterior stddev (in that order)
         """
+        # at_values = test_features
+        # k_lower_left = cov_matrix(self.data_x, at_values,
+        #                           self.covariance_function)
+        # k_lower_right = cov_matrix(at_values, at_values,
+        #                            self.covariance_function)
 
-        # TODO: Use your GP to estimate the posterior mean and stddev for each location here
+        # # Mean.
+        # mean_at_values = np.dot(
+        #     k_lower_left,
+        #     np.dot(self.data_y,
+        #            self._inverse_of_covariance_matrix_of_input.T).T).flatten()
+
+        # # Covariance.
+        # cov_at_values = k_lower_right - \
+        #     np.dot(k_lower_left, np.dot(
+        #         self._inverse_of_covariance_matrix_of_input, k_lower_left.T))
+
+        # # Adding value larger than machine epsilon to ensure positive semi definite
+        # cov_at_values = cov_at_values + 3e-7 * np.ones(
+        #     np.shape(cov_at_values)[0])
+
+        # var_at_values = np.diag(cov_at_values)
+
+        # # TODO: Use your GP to estimate the posterior mean and stddev for each location here
         gp_mean = np.zeros(test_features.shape[0], dtype=float)
         gp_std = np.zeros(test_features.shape[0], dtype=float)
-
-        # TODO: Use the GP posterior to form your predictions here
+        # # print('Infering')
+        # gp_mean, gp_std = self.model.predict(test_features, return_std=True)        
+        # test_features = (test_features - self.x_mean)/self.x_std
+        gp_mean, gp_std = self.model.predict(test_features, return_std=True)
+        # # TODO: Use the GP posterior to form your predictions here
+        # predictions = gp_mean
         predictions = gp_mean
 
         return predictions, gp_mean, gp_std
@@ -62,22 +100,38 @@ class Model(object):
         :param train_features: Training features as a 2d NumPy float array of shape (NUM_SAMPLES, 2)
         :param train_GT: Training pollution concentrations as a 1d NumPy float array of shape (NUM_SAMPLES,)
         """
+        data_x = pd.DataFrame(train_features)
+        labels = pd.DataFrame(train_GT)
+        data = pd.concat([data_x, labels], axis=1)
+        data = data.sample(frac=0.1, replace=True, random_state=1)
+        X = np.array(data.iloc[:,:-1])
+        y = np.array(data.iloc[:, -1])
 
+        # self.y_mean = y.mean()
+        # self.x_mean = x.mean()
+        # self.x_std = x.std()
+        # y = y - self.y_mean
+        # x = x - self.x_mean
+
+        kernel  = RationalQuadratic(length_scale=1.0, alpha=1.0) + WhiteKernel(noise_level=1)
+        self.model = GaussianProcessRegressor(kernel=kernel, alpha=1e-09, normalize_y = True, n_restarts_optimizer=2, random_state=0)
+        
+        # self._inverse_of_covariance_matrix_of_input = np.linalg.inv(cov_matrix(X, X, self.covariance_function))
         # TODO: Fit your model here
-        train_x = self.cluster(train_features)
-        print(len(train_x))
-        print(train_x[0])
-        index = np.where(train_features == train_x[0,:])
-        print([train_features[i] for i in index])
-        pass
 
-    def cluster(self, train_x):
-        N = int(len(train_x)*0.06)
+        self.model.fit(X=X, y=y)
+        
+
+    def cluster(self, train_x, train_y):
+        N = int(len(train_x)*0.2)
         cls_model = KMeans(n_clusters=N)
         cls_model.fit(train_x)
-        closest, _ = pairwise_distances_argmin_min(cls_model.cluster_centers_, train_x)
+        print(cls_model.cluster_centers_)
+        closest, _ = pairwise_distances_argmin_min(X=cls_model.cluster_centers_, Y=train_x, metric='euclidean',axis=1)
         clustered_x = np.array([train_x[i] for i in closest])
-        return clustered_x
+        print(clustered_x)
+        clustered_y = np.array([train_y[i] for i in closest])
+        return clustered_x, clustered_y
 
 
 def cost_function(ground_truth: np.ndarray, predictions: np.ndarray) -> float:
