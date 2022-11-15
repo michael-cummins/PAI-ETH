@@ -16,7 +16,6 @@ import copy
 
 from util import ece, ParameterDistribution, draw_reliability_diagram, draw_confidence_histogram, SGLD
 from enum import Enum
-from torch.autograd import Variable
 
 # TODO: Reliability_diagram_1. Set `EXTENDED_EVALUATION` to `True` in order to visualize your predictions.
 EXTENDED_EVALUATION = False
@@ -47,8 +46,8 @@ def run_solution(dataset_train: torch.utils.data.Dataset, data_dir: str = os.cur
 
     if not combined_model:
         
-        # TODO General_1: Choose y approach here
-        approach = Approach.Backprop
+        # TODO General_1: Choose your approach here
+        approach = Approach.MCDropout
 
         if approach == Approach.Dummy_Trainer:
             trainer = DummyTrainer(dataset_train=dataset_train)
@@ -81,10 +80,9 @@ def run_solution(dataset_train: torch.utils.data.Dataset, data_dir: str = os.cur
 
         # TODO: Combined model_2: If you want to use combined methods 
         # you can set the trainers you want to use like below
-        trainer1 = BackpropTrainer(dataset_train=dataset_train)
-        trainer2 = DropoutTrainer(dataset_train=dataset_train)
-        trainer3 = EnsembleTrainer(dataset_train=dataset_train)
-        # trainer3 = DummyTrainer(dataset_train=dataset_train)
+        trainer1 = DummyTrainer(dataset_train=dataset_train)
+        trainer2 = DummyTrainer(dataset_train=dataset_train)
+        trainer3 = DummyTrainer(dataset_train=dataset_train)
         trainer_list = [trainer1,trainer2,trainer3]
 
         # Train the combined model
@@ -200,6 +198,7 @@ class DummyTrainer(Framework):
     def __init__(self, dataset_train,
                  *args, **kwargs):
         super().__init__(dataset_train, *args, **kwargs)
+
         # Hyperparameters and general parameters
         self.batch_size = 128
         self.learning_rate = 1e-3
@@ -254,21 +253,28 @@ class MNISTNet(nn.Module):
     def __init__(self,
                 in_features: int, 
                 out_features: int,
-                dropout_p=0,
+                dropout_p=0.3,
                 dropout_at_eval=False
                 ):
-        super(MNISTNet, self).__init__()
+        super().__init__()
         # TODO General_2: Play around with the network structure.
         # You could change the depth or width of the model
-        self.layer1 = nn.Linear(in_features,100)
+        self.conv1 = nn.Conv2d(1,10,kernel_size=5,stride=1)
+        self.conv2 = nn.Conv2d(10,10,kernel_size=5,stride=1)
+        self.pool = nn.MaxPool2d(kernel_size=2,stride=2) #2x2 maxpool
+        self.layer1 = nn.Linear(160,100)
         self.layer2 = nn.Linear(100, 100)
         self.layer3 = nn.Linear(100, out_features)
-        self.dropout_p=dropout_p
+        self.dropout_p = dropout_p
         self.dropout_at_eval = dropout_at_eval
 
     def forward(self, x):
         # TODO General_2: Play around with the network structure
         # You might add different modules like Pooling 
+        # x = F.relu(self.conv1(x)) #24x24x10
+        # x = self.pool(x) #12x12x10
+        # x = F.relu(self.conv2(x)) #8x8x10
+        # x = self.pool(x) #4x4x10 
         x = F.dropout(
                 F.relu(self.layer1(x)),
                 p=self.dropout_p,
@@ -309,17 +315,18 @@ class DropoutTrainer(Framework):
         # Hyperparameters and general parameters
         self.batch_size = 128
         self.learning_rate = 1e-3
-        self.num_epochs = 20
+        self.num_epochs = 100
+
 
         self.network = MNISTNet(in_features=28*28,out_features=10,dropout_p=0.2,dropout_at_eval=True)
-        # self.network = BayesNet(in_features=28*28,hidden_features=(100,100),out_features=10)
         self.train_loader = torch.utils.data.DataLoader(
             dataset_train, batch_size=self.batch_size, shuffle=True, drop_last=True
             )
         
-        # weight decay is what does L^2 regularization for weight matrix and biases
-        # best weight_decay = 0.001
-        self.optimizer = torch.optim.Adam(self.network.parameters(), lr=self.learning_rate, weight_decay=0.001) 
+        #weight decay is what does L^2 regularization for weight matrix and biases
+        #best weight_decay = 0.001
+        self.optimizer = torch.optim.Adam(self.network.parameters(), lr=self.learning_rate,weight_decay=0.001) 
+        
 
     def train(self):
         self.network.train()
@@ -331,7 +338,9 @@ class DropoutTrainer(Framework):
                 self.network.zero_grad()
                 # TODO: MC_Dropout_2. Implement MCDropout training here
                 # You need to calculate the loss based on the literature
+                
                 current_logits = self.network(batch_x)
+
                 
                 loss = F.nll_loss(F.log_softmax(current_logits, dim=1), batch_y, reduction='mean')
 
@@ -356,6 +365,7 @@ class DropoutTrainer(Framework):
             pred += F.softmax(self.network(x), dim=1)
             
         pred = pred/101
+
         
         estimated_probability = pred
         
@@ -438,13 +448,49 @@ class SGLDTrainer(Framework):
         # You can check the Dummy Trainer above for intution about what to do
         self.network = None
         
+        self.network = MNISTNet(in_features=28*28,out_features=10)
+        self.train_loader = torch.utils.data.DataLoader(
+            dataset_train, batch_size=self.batch_size, shuffle=True, drop_last=True
+            )
+        self.optimizer = torch.optim.Adam(self.network.parameters(), lr=self.learning_rate)
+        self.SGLD = SGLD()
+        
         # SGLD optimizer is provided
         self.optimizer = SGLD(self.network.parameters(),lr = self.learning_rate)
 
         # deques support bi-directional addition and deletion
         # You can add models in the right side of a deque by append()
         # You can delete models in the left side of a deque by popleft()
-        self.SGLDSequence = deque() 
+        self.SGLDSequence = deque()
+        
+        def train(self):
+            self.network.train()
+            progress_bar = trange(self.num_epochs)
+            for _ in progress_bar:
+                for batch_idx, (batch_x, batch_y) in enumerate(self.train_loader):
+                    # batch_x are of shape (batch_size, 784), batch_y are of shape (batch_size,)
+
+                    self.network.zero_grad()
+
+                    # Perform forward pass
+                    current_logits = self.network(batch_x)
+
+                    # Calculate the loss
+                    # We use the negative log likelihood as the loss
+                    # Combining nll_loss with a log_softmax is better for numeric stability
+                    loss = F.nll_loss(F.log_softmax(current_logits, dim=1), batch_y, reduction='sum')
+
+                    # Backpropagate to get the gradients
+                    loss.backward()
+
+                    self.optimizer.step()
+
+                    # Update progress bar with accuracy occasionally
+                    if batch_idx % self.print_interval == 0:
+                        current_logits = self.network(batch_x)
+
+                        current_accuracy = (current_logits.argmax(axis=1) == batch_y).float().mean()
+                        progress_bar.set_postfix(loss=loss.item(), acc=current_accuracy.item())
 
     def train(self):
         num_iter = 0
@@ -507,29 +553,28 @@ class BackpropTrainer(Framework):
         self.hidden_features=(100,100)
         self.batch_size = 128
         self.num_epochs = 100
-        self.learning_rate = 1e-2
+        learning_rate = 1e-3
 
         self.network = BayesNet(in_features=28 * 28, hidden_features=self.hidden_features, out_features=10)
-        self.optimizer = torch.optim.Adam(self.network.parameters(), lr=self.learning_rate)
+        self.optimizer = torch.optim.Adam(self.network.parameters(), lr=learning_rate)
         self.train_loader = torch.utils.data.DataLoader(
             dataset_train, batch_size=self.batch_size, shuffle=True, drop_last=True
-        )
+            )
 
     def train(self):
 
         self.network.train()
-        progress_bar = trange(self.num_epochs)
 
+        progress_bar = trange(self.num_epochs)
         for _ in progress_bar:
             num_batches = len(self.train_loader)
             for batch_idx, (batch_x, batch_y) in enumerate(self.train_loader):
                 # batch_x are of shape (batch_size, 784), batch_y are of shape (batch_size,)
+
                 self.network.zero_grad()
 
                 # TODO: Backprop_6: Implement Bayes by backprop training here
-                output, lp, lvp = self.network(batch_x)
-                loss = F.nll_loss(output, target=batch_y, reduction='sum') + (lvp - lp)/num_batches
-                loss.backward()
+                loss = None
                 self.optimizer.step()
 
                 # Update progress bar with accuracy occasionally
@@ -555,7 +600,6 @@ class BackpropTrainer(Framework):
         assert torch.allclose(torch.sum(estimated_probability, dim=1), torch.tensor(1.0))
         return estimated_probability
 
-
 class BayesianLayer(nn.Module):
     """
     Module implementing a single Bayesian feedforward layer.
@@ -575,19 +619,16 @@ class BayesianLayer(nn.Module):
         self.out_features = out_features
         self.use_bias = bias
 
-        # Using xavier initialization for weights and biases
-        xavier = np.sqrt(2/(in_features+out_features))
-
         # Background Pytorch will backpropogate gradients to an object initialized with
         # torch.Parameter(...) and the object will be updated when computing loss.backwards()
         # during training. This will not happen for a torch.Tensor(...) object, which is by default a constant. 
-        
+
         # TODO: Backprop_1. Create a suitable prior for weights and biases as an instance of ParameterDistribution.
         #  You can use the same prior for both weights and biases, but are also free to experiment with other priors.
         #  You can create constants using torch.tensor(...).
         #  Do NOT use torch.Parameter(...) here since the prior should not be optimized!
         #  Example: self.prior = MyPrior(torch.tensor(0.0), torch.tensor(1.0))
-        self.prior = UnivariateGaussian(torch.tensor(0.0), torch.tensor(xavier))
+        self.prior = None
         assert isinstance(self.prior, ParameterDistribution)
         assert not any(True for _ in self.prior.parameters()), 'Prior cannot have parameters'
 
@@ -597,16 +638,12 @@ class BayesianLayer(nn.Module):
         #  IMPORTANT: You need to create a nn.Parameter(...) for each parameter
         #  and add those parameters as an attribute in the ParameterDistribution instances.
         #  If you forget to do so, PyTorch will not be able to optimize your variational posterior.
-        #  The variational posterior for weights is created here. For the biases it is created further down. 
+        # The variational posterior for weights is created here. For the biases it is created further down. 
         #  Example: self.weights_var_posterior = MyPosterior(
         #      torch.nn.Parameter(torch.zeros((out_features, in_features))),
         #      torch.nn.Parameter(torch.ones((out_features, in_features)))
         #  )
-
-        self.weights_var_posterior = MultivariateDiagonalGaussian(
-            nn.Parameter(torch.zeros((out_features, in_features))),
-            nn.Parameter(xavier*torch.ones((out_features, in_features))),
-        )
+        self.weights_var_posterior = None
 
         assert isinstance(self.weights_var_posterior, ParameterDistribution)
         assert any(True for _ in self.weights_var_posterior.parameters()), 'Weight posterior must have parameters'
@@ -614,10 +651,7 @@ class BayesianLayer(nn.Module):
         if self.use_bias:
             # TODO: Backprop_1. Similarly as you did above for the weights, create the bias variational posterior instance here.
             #  Make sure to follow the same rules as for the weight variational posterior.
-            self.bias_var_posterior = MultivariateDiagonalGaussian(
-                nn.Parameter(torch.zeros(out_features)),
-                nn.Parameter(xavier*torch.ones(out_features)),
-            )
+            self.bias_var_posterior = None
             assert isinstance(self.bias_var_posterior, ParameterDistribution)
             assert any(True for _ in self.bias_var_posterior.parameters()), 'Bias posterior must have parameters'
         else:
@@ -640,15 +674,10 @@ class BayesianLayer(nn.Module):
         # TODO: Backprop_2. Perform a forward pass as described in this method's docstring.
         #  Make sure to check whether `self.use_bias` is True,
         #  and if yes, include the bias as well.
-
-        weights = self.weights_var_posterior.sample()
-        log_prior = self.prior.log_likelihood(weights)
-        log_variational_posterior = self.weights_var_posterior.log_likelihood(weights)
-        
-        if self.use_bias:
-            bias = self.bias_var_posterior.sample()
-            log_prior += self.prior.log_likelihood(bias)
-            log_variational_posterior += self.bias_var_posterior.log_likelihood(bias)
+        log_prior = torch.tensor(0.0)
+        log_variational_posterior = torch.tensor(0.0)
+        weights = None
+        bias = None
 
         return F.linear(inputs, weights, bias), log_prior, log_variational_posterior
 
@@ -668,7 +697,7 @@ class BayesNet(nn.Module):
         :param out_features: Number of output features
         """
 
-        super(BayesNet, self).__init__()
+        super().__init__()
 
         feature_sizes = (in_features,) + hidden_features + (out_features,)
         num_affine_maps = len(feature_sizes) - 1
@@ -676,7 +705,6 @@ class BayesNet(nn.Module):
             BayesianLayer(feature_sizes[idx], feature_sizes[idx + 1], bias=True)
             for idx in range(num_affine_maps)
         ])
-        self.drop = nn.Dropout(p=0.2)
         self.activation = nn.ReLU()
 
     def forward(self, x: torch.Tensor) -> typing.Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -696,22 +724,12 @@ class BayesNet(nn.Module):
         #  Don't forget to apply your activation function in between BayesianLayers!
         log_prior = torch.tensor(0.0)
         log_variational_posterior = torch.tensor(0.0)
-        output_features = x
+        output_features = None
 
-        for idx, layer in enumerate(self.layers):
-            output_features, lp, lvp = layer(output_features)
-            log_prior += lp
-            log_variational_posterior += lvp
-
-            # Don't use activaton on last layer
-            if idx < len(self.layers) - 1:
-                output_features = self.drop(output_features)
-                output_features = self.activation(output_features)
-
-        return F.log_softmax(output_features, dim=1), log_prior, log_variational_posterior
+        return output_features, log_prior, log_variational_posterior
 
 
-    def predict_probabilities(self, x: torch.Tensor, num_mc_samples: int = 10) -> torch.Tensor:
+    def predict_probabilities(self, x: torch.Tensor, num_mc_samples: int = 50) -> torch.Tensor:
         """
         Predict class probabilities for the given features by sampling from this BNN.
 
@@ -720,7 +738,7 @@ class BayesNet(nn.Module):
         :return: Predicted class probabilities, float tensor of shape (batch_size, 10)
             such that the last dimension sums up to 1 for each row
         """
-        probability_samples = torch.stack([self.forward(x)[0] for _ in range(num_mc_samples)], dim=0)
+        probability_samples = torch.stack([F.softmax(self.forward(x)[0], dim=1) for _ in range(num_mc_samples)], dim=0)
         estimated_probability = torch.mean(probability_samples, dim=0)
 
         assert estimated_probability.shape == (x.shape[0], 10)
@@ -744,12 +762,12 @@ class UnivariateGaussian(ParameterDistribution):
     def log_likelihood(self, values: torch.Tensor) -> torch.Tensor:
         # TODO: Backprop_4. You need to complete the log likelihood function 
         # for the Univariate Gaussian distribution. 
-        return torch.log(1/(self.sigma*np.sqrt(2*np.pi)))*len(values) - 0.5*(((values-self.mu)/self.sigma)**2).sum()
+        return 0.0
 
     def sample(self) -> torch.Tensor:
         # TODO: Backprop_4. You need to complete the sample function 
-        # for the Univariate Gaussian distribution.
-        return torch.randn() * self.sigma + self.mu # ~ N(mu, sigma^2)
+        # for the Univariate Gaussian distribution. 
+        raise NotImplementedError()
 
 
 class MultivariateDiagonalGaussian(ParameterDistribution):
@@ -769,17 +787,13 @@ class MultivariateDiagonalGaussian(ParameterDistribution):
 
     def log_likelihood(self, values: torch.Tensor) -> torch.Tensor:
         # TODO: Backprop_5. You need to complete the log likelihood function 
-        # for the Multivariate DiagonalGaussian Gaussian distribution.
-        var = F.softplus(self.rho.flatten())**2
-        d = (values-self.mu).flatten()
-        log_like = -(len(var)/2)*np.log(2*np.pi) - var.log().sum()/2 - d.T @ (d/(2*var))
-        return log_like 
+        # for the Multivariate DiagonalGaussian Gaussian distribution. 
+        return 0.0
 
     def sample(self) -> torch.Tensor:
         # TODO: Backprop_5. You need to complete the sample function 
         # for the Multivariate DiagonalGaussian Gaussian distribution. 
-        sigma = F.softplus(self.rho)
-        return torch.randn(*self.mu.shape)*sigma + self.mu
+        raise NotImplementedError()
 
 
 
@@ -986,11 +1000,11 @@ def evaluate(model:Framework, eval_loader: torch.utils.data.DataLoader, data_dir
 
 
 def main():
-    raise RuntimeError(
-        'This main method is for illustrative purposes only and will NEVER be called by the checker!\n'
-        'The checker always calls run_solution directly.\n'
-        'Please implement your solution exclusively in the methods and classes mentioned in the task description.'
-    )
+    # raise RuntimeError(
+    #     'This main method is for illustrative purposes only and will NEVER be called by the checker!\n'
+    #     'The checker always calls run_solution directly.\n'
+    #     'Please implement your solution exclusively in the methods and classes mentioned in the task description.'
+    # )
 
     # Load training data
     data_dir = os.curdir
