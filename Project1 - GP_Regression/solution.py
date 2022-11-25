@@ -58,35 +58,11 @@ class Model(object):
             Tuple of three 1d NumPy float arrays, each of shape (NUM_SAMPLES,),
             containing your predictions, the GP posterior mean, and the GP posterior stddev (in that order)
         """
-        # at_values = test_features
-        # k_lower_left = cov_matrix(self.data_x, at_values,
-        #                           self.covariance_function)
-        # k_lower_right = cov_matrix(at_values, at_values,
-        #                            self.covariance_function)
-
-        # # Mean.
-        # mean_at_values = np.dot(
-        #     k_lower_left,
-        #     np.dot(self.data_y,
-        #            self._inverse_of_covariance_matrix_of_input.T).T).flatten()
-
-        # # Covariance.
-        # cov_at_values = k_lower_right - \
-        #     np.dot(k_lower_left, np.dot(
-        #         self._inverse_of_covariance_matrix_of_input, k_lower_left.T))
-
-        # # Adding value larger than machine epsilon to ensure positive semi definite
-        # cov_at_values = cov_at_values + 3e-7 * np.ones(
-        #     np.shape(cov_at_values)[0])
-
-        # var_at_values = np.diag(cov_at_values)
-
+        
         # # TODO: Use your GP to estimate the posterior mean and stddev for each location here
         gp_mean = np.zeros(test_features.shape[0], dtype=float)
         gp_std = np.zeros(test_features.shape[0], dtype=float)
-        # # print('Infering')
-        # gp_mean, gp_std = self.model.predict(test_features, return_std=True)        
-        # test_features = (test_features - self.x_mean)/self.x_std
+ 
         gp_mean, gp_std = self.model.predict(test_features, return_std=True)
         # # TODO: Use the GP posterior to form your predictions here
         # predictions = gp_mean
@@ -107,14 +83,8 @@ class Model(object):
         X = np.array(data.iloc[:,:-1])
         y = np.array(data.iloc[:, -1])
 
-        # self.y_mean = y.mean()
-        # self.x_mean = x.mean()
-        # self.x_std = x.std()
-        # y = y - self.y_mean
-        # x = x - self.x_mean
-
         kernel  = RationalQuadratic(length_scale=1.0, alpha=1.0) + WhiteKernel(noise_level=1)
-        self.model = GaussianProcessRegressor(kernel=kernel, alpha=1e-09, normalize_y = True, n_restarts_optimizer=2, random_state=0)
+        self.model = GaussianProcessRegressor(kernel=kernel, alpha=1e-09, normalize_y=True, n_restarts_optimizer=2, random_state=0)
         
         # self._inverse_of_covariance_matrix_of_input = np.linalg.inv(cov_matrix(X, X, self.covariance_function))
         # TODO: Fit your model here
