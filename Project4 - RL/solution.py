@@ -64,9 +64,8 @@ def mlp(sizes, activation, output_activation=nn.Identity):
             for i in range(1, len(sizes)-2)
         ]
     net_layers = [layer1, *hidden, outlayer]
-    
-    net = nn.Sequential(*net_layers)
-    return net
+    mlp = nn.Sequential(*net_layers)
+    return mlp
 
 
 class Actor(nn.Module):
@@ -98,7 +97,9 @@ class Actor(nn.Module):
         # Hint: The logits_net returns for a given observation the log 
         # probabilities. You should use them to obtain a Categorical 
         # distribution.
-        raise NotImplementedError
+        actions = self.logits_net(obs)
+        dist = torch.distributions.Categorical(actions)
+        return dist
 
     def _log_prob_from_distribution(self, pi, act):
         """
@@ -121,8 +122,8 @@ class Actor(nn.Module):
         """
 
         # TODO: Implement this function.
-
-        raise NotImplementedError
+        log_prob = pi.log_prob(act).view(-1,1)
+        return log_prob
 
     def forward(self, obs, act=None):
         """
@@ -146,8 +147,9 @@ class Actor(nn.Module):
 
         # TODO: Implement this function.
         # Hint: If act is None, log_prob is also None.
-
-        raise NotImplementedError
+        pi = self._distribution(obs=obs)
+        log_prob = self._log_prob_from_distribution(pi, act)
+        return pi, log_prob
 
 
 class Critic(nn.Module):
