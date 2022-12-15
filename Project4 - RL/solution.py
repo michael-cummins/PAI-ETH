@@ -11,6 +11,7 @@ from gym.spaces import Box, Discrete
 import torch
 from torch.optim import Adam
 import torch.nn as nn
+import torch.functional as F
 
 
 def discount_cumsum(x, discount):
@@ -55,7 +56,6 @@ def mlp(sizes, activation, output_activation=nn.Identity):
     # Hint: Use nn.Sequential to stack multiple layers of the network.
     layer1 = nn.Sequential(nn.Linear(in_features=sizes[0], out_features=sizes[1]), activation())
     outlayer = nn.Sequential(nn.Linear(in_features=sizes[-2], out_features=sizes[-1]), output_activation())
-    print(sizes)
     if len(sizes) <= 3:
         hidden = []
     else:
@@ -65,7 +65,7 @@ def mlp(sizes, activation, output_activation=nn.Identity):
         ]
     net_layers = [layer1, *hidden, outlayer]
     mlp = nn.Sequential(*net_layers)
-    return mlp
+    return mlp.float()
 
 
 class Actor(nn.Module):
@@ -98,7 +98,7 @@ class Actor(nn.Module):
         # probabilities. You should use them to obtain a Categorical 
         # distribution.
         actions = self.logits_net(obs)
-        dist = torch.distributions.Categorical(actions)
+        dist = torch.distributions.categorical.Categorical(logits=actions)
         return dist
 
     def _log_prob_from_distribution(self, pi, act):
@@ -122,7 +122,9 @@ class Actor(nn.Module):
         """
 
         # TODO: Implement this function.
-        log_prob = pi.log_prob(act).view(-1,1)
+    
+        log_prob = pi.log_prob(act)
+    
         return log_prob
 
     def forward(self, obs, act=None):
@@ -147,8 +149,11 @@ class Actor(nn.Module):
 
         # TODO: Implement this function.
         # Hint: If act is None, log_prob is also None.
+    
         pi = self._distribution(obs=obs)
-        log_prob = self._log_prob_from_distribution(pi, act)
+        log_prob = None
+        if act is not None:
+            log_prob = self._log_prob_from_distribution(pi, act)
         return pi, log_prob
 
 
@@ -234,7 +239,11 @@ class VPGBuffer:
         assert self.ptr < self.max_size
 
         # TODO: Store new data in the respective buffers.
-
+        self.act_buf[self.ptr] = act
+        self.obs_buf[self.ptr] = obs
+        self.rew_buf[self.ptr] = rew
+        self.val_buf[self.ptr] = val
+        self.logp_buf[self.ptr] = logp
 
         # Update pointer after data is stored.
         self.ptr += 1
@@ -254,11 +263,9 @@ class VPGBuffer:
             Last value is value(state) if the rollout is cut-off at a
             certain state, or 0 if trajectory ended uninterrupted.
         """
-
         # Get the indexes where TD residuals and discounted 
         # rewards-to-go are stored.
         path_slice = slice(self.path_start_idx, self.ptr)
-        
         rews = np.append(self.rew_buf[path_slice], last_val)
         vals = np.append(self.val_buf[path_slice], last_val)
 
@@ -268,13 +275,14 @@ class VPGBuffer:
 
         # TODO: Implement TD residuals calculation.
         # Hint: use the discount_cumsum function 
-        # self.tdres_buf[path_slice] = ...
+        delta = rews[:-1] - vals[:-1] + self.gamma*vals[1:] 
+        self.tdres_buf[path_slice] = discount_cumsum(delta, self.gamma*self.lam) 
 
 
         # TODO: Implement discounted rewards-to-go calculation. 
         # Hint: use the discount_cumsum function 
         # self.ret_buf[path_slice] = ...
-
+        self.ret_buf[path_slice] = discount_cumsum(rews[:-1], self.gamma)
 
         # Update the path_start_idx
         self.path_start_idx = self.ptr
@@ -332,8 +340,13 @@ class Agent:
         # TODO: Implement this function.
         # Hint: This function is only called during inference. You should use
         # `torch.no_grad` to ensure that it does not interfer with the gradient computation.
+        with torch.no_grad():
+            v = self.critic.forward(state)
+            pi = self.actor._distribution(state)
+            act = pi.sample()
+            logp = self.actor._log_prob_from_distribution(pi, act)
 
-        return 0, 0, 0
+        return act, v, logp
 
     def act(self, state):
         return self.step(state)[0]
@@ -358,8 +371,10 @@ class Agent:
 
         # TODO: Implement this function.
         # Currently, this just returns a random action.
-        
-        return np.random.choice([0, 1, 2, 3])
+        obs = torch.tensor(obs).float()
+        action, _ = self.actor.forward(obs)
+
+        return action.sample().item()
 
 
 def train(env, seed=0):
@@ -388,7 +403,7 @@ def train(env, seed=0):
     # Number of training steps per epoch
     steps_per_epoch = 3000
     # Number of epochs to train for
-    epochs = 50
+    epochs = 60
     # The longest an episode can go on before cutting it off
     max_ep_len = 300
     # Discount factor for weighting future rewards
@@ -457,13 +472,33 @@ def train(env, seed=0):
         actor_optimizer.zero_grad() #reset the gradient in the actor optimizer
 
         #Hint: you need to compute a 'loss' such that its derivative with respect to the actor
-        # parameters is the policy gradient. Then call loss.backwards() and actor_optimizer.step()
+        # parameters is the policy gradient. Then call
+        tdres = data['tdres']
+        obs = data['obs']
+        acts = data['act']
+        ret = data['ret']
+       
+        # Get the log probability of actions given observations
+        # Loss = Advanrtage * logprob, advantage is td residuals
+        _, logp = agent.actor.forward(obs, acts)
+        actor_loss = -logp*tdres
+        actor_loss = actor_loss.mean()
+
+        actor_loss.backward() 
+        actor_optimizer.step()
 
         # We suggest to do 100 iterations of value function updates
         for _ in range(100):
             critic_optimizer.zero_grad()
-            #compute a loss for the value function, call loss.backwards() and then
-            #critic_optimizer.step()
+            
+            #compute a loss for the value function, call 
+            # Take mean squared error of critic's value and actual return
+            mse = nn.MSELoss()
+            v = agent.critic.forward(obs=obs)
+            critic_loss = mse(v, ret)
+
+            critic_loss.backward() 
+            critic_optimizer.step()
 
 
     return agent
@@ -504,6 +539,7 @@ def main():
                 rec.capture_frame()
             # Taking an action in the environment
             action = agent.get_action(state)
+            print(f'action: {action}')
             state, reward, terminal = env.transition(action)
             cumulative_return += reward
             if terminal:
